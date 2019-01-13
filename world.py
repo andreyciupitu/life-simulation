@@ -2,15 +2,35 @@ import random
 import queue
 import params
 
-DIRECTIONS = {"North": (0, -1), "South": (0, 1), "West": (-1, 0), "East": (1, 0)}
+# Directions
+NORTH = "north"
+SOUTH = "south"
+EAST = "east"
+WEST = "west"
+DIRECTIONS = {NORTH: (0, -1), SOUTH: (0, 1), WEST: (-1, 0), EAST: (1, 0)}
+OPPOSITE = {NORTH: SOUTH, SOUTH: NORTH, WEST: EAST, EAST: WEST}
+
+# State index
 AVAILABLE = 0
-WATER = 1
-FRIENDS = 2
+WATER_DIR = 1
+FRIENDS_DIR = 2
+IN_FOREST = 3
+CENTER_DIR = 4
+
+# Commands
+MOVE = "move"
+STAY = "stay"
+EAT = "consume"
+
+# Tile types
+NORMAL = "normal"
+WATER = "water"
+FOREST = "forest"
 
 
 class MapTile:
     def __init__(self):
-        self.type = "normal"
+        self.type = NORMAL
         self.blips = []
         self.value = 0
 
@@ -19,22 +39,69 @@ class Blip:
     """
     An agent that takes part in the simulation.
     """
+    EXPLORE_CHANCE = 0.25
 
     def __init__(self, lifetime):
         self.lifetime = lifetime
         self.age = 0
         self.strength = params.MAX_RES
-        self.vapours = params.MAX_RES
+        self.vapors = params.MAX_RES
         self.pregnant = False
         self.due_time = 0
+        self.threshold = max(params.MAX_RES / 2, params.BUDDING_MIN_RES)
 
     def decide_action(self, state):
-        if not state[WATER]:
-            return "stand", None
-        elif state[WATER] not in state[AVAILABLE]:
-            return "consume", params.MAX_RES - self.vapours
+        """
+        Decides the next action of the blip based on its current state
+        :param state: A tuple (available directions, direction to water, direction to other blips)
+        :return: A tuple (move type from [MOVE, STAY, EAT], arg)
+        """
+        # If it's old it just wanders around till it's dead
+        if self.age > params.MAX_BUDDING_AGE:
+            return MOVE, random.choice(state[AVAILABLE])
+
+        # Go to the center to make the baby
+        if self.pregnant:
+            return MOVE, state[CENTER_DIR]
+
+        # If I need water
+        if self.vapors < self.threshold and self.vapors <= self.strength:
+            # If I don't know where the water is
+            # check with the other blips, maybe they know
+            if not state[WATER_DIR]:
+                return MOVE, state[FRIENDS_DIR]
+
+            # Drink water if near the lake
+            if state[WATER_DIR] not in state[AVAILABLE]:
+                return EAT, params.MAX_RES - self.vapors
+
+            # Go to water source if available
+            return MOVE, state[WATER_DIR]
+
+        # If I need to eat
+        if self.strength < self.threshold:
+            if not state[IN_FOREST] and EAST in state[AVAILABLE]:
+                return MOVE, EAST
+            else:
+                if random.random() < 0.5:
+                    return MOVE, random.choice(state[AVAILABLE])
+                else:
+                    return EAT, params.BUDDING_MIN_RES - self.strength + params.POWER_TO_STAY
+
+
+        # If I'm ok, then wander around or explore the rest of the map
+        if random.random() < Blip.EXPLORE_CHANCE:
+            return MOVE, WEST
         else:
-            return "move", state[WATER]
+            return MOVE, random.choice(state[AVAILABLE])
+
+    def get_status(self):
+        """
+        Returns the current status of the blip.
+
+        :return: A tuple (age%, vapors%, strength%)
+        """
+        return 1 - self.age / self.lifetime, self.vapors / params.MAX_RES, self.strength / params.MAX_RES
 
 
 class World:
@@ -60,14 +127,14 @@ class World:
         for y in range(self.height):
             for x in range(self.width - forest_width, self.width):
                 self.map[y][x].value = params.FOOD_SIZE
-                self.map[y][x].type = "food"
+                self.map[y][x].type = FOREST
                 self.food_tiles.append((x, y))
 
         # Create lake in the West
         lake_start = random.randint(0, self.height - lake_size)
         for y in range(lake_size):
             for x in range(lake_size):
-                self.map[lake_start + y][x].type = "water"
+                self.map[lake_start + y][x].type = WATER
                 self.water_tiles.append((x, lake_start + y))
 
         # Init blips
@@ -76,7 +143,7 @@ class World:
             y = random.randint(0, self.height - 1)
 
             # Spawn only on free tiles
-            while self.map[y][x].type != "normal":
+            while self.map[y][x].type != NORMAL:
                 x = random.randint(0, self.width - 1)
                 y = random.randint(0, self.height - 1)
 
@@ -115,11 +182,11 @@ class World:
             c = blip.decide_action(states[blip])
 
             # Execute action
-            if c[0] == "move":
+            if c[0] == MOVE:
                 self.move(blip, c[1])
-            elif c[0] == "stay":
+            elif c[0] == STAY:
                 self.stay(blip)
-            elif c[0] == "consume":
+            elif c[0] == EAT:
                 self.consume(blip, c[1])
 
     def turn_end(self):
@@ -134,16 +201,21 @@ class World:
 
         # Check for new blips or dead ones
         dead_blips = []
+        due_blips = []
         for blip, pos in self.blips.items():
-            # Kill off old blip
-            if blip.age == blip.lifetime:
+            # Kill off old  & weak blips
+            if blip.age == blip.lifetime or blip.vapors <= 0 or blip.strength <= 0:
                 dead_blips.append(blip)
 
             # Spawn new blip
-            # if blip.pregnant and blip.due_time == params.BUDDING_TIME:
-            #     blip.pregnant = False
-            #     blip.due_time = 0
-            #     self.spawn_blip(pos)
+            if blip.pregnant and blip.due_time == params.BUDDING_TIME:
+                blip.pregnant = False
+                blip.due_time = 0
+                due_blips.append(blip)
+
+        # Spawn babies
+        for b in due_blips:
+            self.spawn_blip(self.blips[b])
 
         # Remove dead blips
         for b in dead_blips:
@@ -158,8 +230,12 @@ class World:
         the blip stay still.
 
         :param blip: Blip to be moved
-        :param direction: Movement direction [North, South, East, West]
+        :param direction: Movement direction [NORTH, SOUTH, EAST, WEST]
         """
+        if not direction:
+            self.stay(blip)
+            return
+
         dx, dy = DIRECTIONS[direction]
         x, y = self.blips[blip]
         new_pos = (x + dx, y + dy)
@@ -167,6 +243,7 @@ class World:
         # Only do the move if it's valid
         if not self.is_valid(new_pos):
             self.stay(blip)
+            return
 
         # Update pos
         self.blips[blip] = new_pos
@@ -179,7 +256,7 @@ class World:
         else:
             factor = 1
         blip.strength -= factor * params.POWER_TO_MOVE
-        blip.vapours -= factor * params.VAPOUR_TO_MOVE
+        blip.vapors -= factor * params.VAPOUR_TO_MOVE
 
     def stay(self, blip):
         """
@@ -192,7 +269,7 @@ class World:
         else:
             factor = 1
         blip.strength -= factor * params.POWER_TO_STAY
-        blip.vapours -= factor * params.VAPOUR_TO_STAY
+        blip.vapors -= factor * params.VAPOUR_TO_STAY
 
     def consume(self, blip, quantity):
         """
@@ -209,9 +286,9 @@ class World:
         self.stay(blip)
 
         # Drink water
-        neighbours = [pos for _, pos in self.get_neighbours((x, y))]
-        if any(map(lambda pos: self.map[pos[1]][pos[0]].type == "water", neighbours)):
-            blip.vapours += quantity
+        for _, (dx, dy) in DIRECTIONS.items():
+            if (x + dx, y + dy) in self.water_tiles:
+                blip.vapors += quantity
 
         # Consume the available food
         if self.map[y][x].value >= quantity:
@@ -230,8 +307,9 @@ class World:
         x, y = pos
 
         # Compute the lifespan of the new blip
-        # TODO add scaling based on distance
-        lifespan = params.MAX_LIFE - random.randint(0, params.AGE_VAR)
+        scale = abs(y - self.height / 2) + abs(x - self.width / 2)
+        scale /= (self.height + self.width) / 2
+        lifespan = params.MAX_LIFE - random.randint(0, int(params.AGE_VAR * scale))
 
         # Create blip and place it on the map
         blip = Blip(lifespan)
@@ -256,7 +334,7 @@ class World:
 
         # Check if budding conditions are met
         if params.MIN_BUDDING_AGE <= blip.age <= params.MAX_BUDDING_AGE:
-            if min(blip.strength, blip.vapours) >= params.BUDDING_MIN_RES:
+            if min(blip.strength, blip.vapors) >= params.BUDDING_MIN_RES:
                 # Roll the dice
                 accident = random.random() * 100 <= params.BUDDING_PROB
                 if accident:
@@ -272,7 +350,26 @@ class World:
         :return: A tuple (available_directions, direction_to_water, direction_to_others)
         """
         available = [d for d, _ in self.get_neighbours(self.blips[blip])]
-        return available, self.sense_water(blip), self.sense_friends(blip)
+        in_forest = self.blips[blip] in self.food_tiles
+
+        return available, self.sense_water(blip), self.sense_friends(blip), in_forest, self.sense_center(blip)
+
+    def sense_center(self, blip):
+        """
+        Detects the shortest path to the map center.
+
+        :param blip: The blip that makes the query
+        :return: A direction from [NORTH, SOUTH, EAST, WEST]
+        """
+        x, y = self.blips[blip]
+        center_x, center_y = (self.width / 2, self.height / 2)
+
+        # Distance test
+        dist = lambda pos: abs(pos[1] - center_y) + abs(pos[0] - center_x)
+
+        # Choose the neighbour on the shortest path to center
+        neighbours_dist = [(d, dist(pos)) for d, pos in self.get_neighbours((x, y))]
+        return min(neighbours_dist, key=lambda t: t[1])[0]
 
     def sense_water(self, blip):
         """
@@ -280,7 +377,7 @@ class World:
         water is closer than SEE_RANGE.
 
         :param blip: The blip that makes the query
-        :return: A direction from [North, South, East, West],
+        :return: A direction from [NORTH, SOUTH, EAST, WEST],
                 None if no blips are in range
         """
         x, y = self.blips[blip]
@@ -305,7 +402,7 @@ class World:
         The other blips must be in SEE_RANGE
 
         :param blip: The blip that does the query
-        :return: A direction from [North, South, East, West],
+        :return: A direction from [NORTH, SOUTH, EAST, WEST],
                 None if no blips are in range
         """
         x, y = self.blips[blip]
@@ -334,7 +431,7 @@ class World:
         Verifies if a position is contained in the grid and not a water tile.
         """
         x, y = position
-        return 0 <= x < self.width and 0 <= y < self.height and self.map[y][x].type != "water"
+        return 0 <= x < self.width and 0 <= y < self.height and self.map[y][x].type != WATER
 
     def compute_distances(self, start, costs=None):
         """

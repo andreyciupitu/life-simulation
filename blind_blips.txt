@@ -1,0 +1,17 @@
+20                  INIT_POP
+100                 MAX_LIFE
+20                  AGE_VAR
+10                  BUDDING_PROB
+200                 BUDDING_MIN_RES
+40                  MIN_BUDDING_AGE
+50                  MAX_BUDDING_AGE
+1                   BUDDING_TIME
+2                   BUD_FACTOR
+200                 FOOD_SIZE
+200                 FOOD_BUILD
+1                   POWER_TO_STAY
+1                   VAPOUR_TO_STAY
+2                   POWER_TO_MOVE
+2                   VAPOUR_TO_MOVE
+300                 MAX_RES
+0                   SEE_RANGE
